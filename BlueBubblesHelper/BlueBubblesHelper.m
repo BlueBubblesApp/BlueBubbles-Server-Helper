@@ -138,27 +138,51 @@ BlueBubblesHelper *plugin;
             DLog(@"BLUEBUBBLESHELPER: %lld", reactionLong);
 
             // Get the messageItem
-            IMTextMessagePartChatItem *messageItem = [BlueBubblesHelper getMessageItem:(chat) :(eventDataArr[1])];
+            NSArray *messageItemInfo = [BlueBubblesHelper getMessageItem:(chat) :(eventDataArr[1])];
 
-            DLog(@"BLUEBUBBLESHELPER: %@", [[[messageItem message] messageSummaryInfo] valueForKey:@"ust"]);
+//            DLog(@"BLUEBUBBLESHELPER: %@", [[[messageItem message] messageSummaryInfo] valueForKey:@"ust"]);
 
             //Build the message summary
-            NSDictionary *messageSummary = @{@"amc":[[[messageItem message] messageSummaryInfo] valueForKey:@"ust"],@"ams":[[messageItem message] plainBody]};
+            NSDictionary *messageSummary = @{@"amc":messageItemInfo[1], @"ams":[[messageItemInfo[0] message] plainBody]};
 
             DLog(@"BLUEBUBBLESHELPER: %lld", reactionLong);
-            DLog(@"BLUEBUBBLESHELPER: %@", messageItem);
+            DLog(@"BLUEBUBBLESHELPER: %@", messageItemInfo[0]);
             DLog(@"BLUEBUBBLESHELPER: %@", messageSummary);
 
             // Send the tapback
-            [chat sendMessageAcknowledgment:(reactionLong) forChatItem:(messageItem) withMessageSummaryInfo:(messageSummary)];
+            [chat sendMessageAcknowledgment:(reactionLong) forChatItem:(messageItemInfo[0]) withMessageSummaryInfo:(messageSummary)];
 
             DLog(@"BLUEBUBBLESHELPER: sent reaction");
         }
-    }
+    } else if([event isEqualToString: @"send-message"]) {
+        // Index 0 is chat guid, index 1 is the message text, index 2 is the tempguid
+        NSArray *eventDataArr = [eventData componentsSeparatedByString:(@",")];
+        NSAttributedString* textBody = [[NSAttributedString alloc] initWithString:eventDataArr[1]];
+
+
+//        IMAccountController *sharedAccountController = [IMAccountController sharedInstance];
+//
+//        IMAccount *activeAccount = [sharedAccountController activeIMessageAccount];
+//
+//        if(activeAccount == nil) {
+//            activeAccount = [sharedAccountController activeSMSAccount];
+//        }
+        
+        IMChat *activeChat = [BlueBubblesHelper getChat:eventDataArr[0]];
+        
+        IMMessage* myMessage;
+        if(activeChat != nil) {
+            myMessage = [IMMessage instantMessageWithText:textBody flags:1048581];
+            [activeChat sendMessage:myMessage];
+            DLog(@"BLUEBUBBLESHELPER: sent message");
+            [BlueBubblesHelper updateMessage:eventDataArr[0] :eventDataArr[2] :[myMessage guid]];
+        }
+        
     // If the server tells us to start typing
-     else if([event isEqualToString: @"start-typing"]) {
+    } else if([event isEqualToString: @"start-typing"]) {
         // Get the IMChat instance for the guid specified in eventData
         IMChat *chat = [BlueBubblesHelper getChat: eventData];
+        
         if(chat != nil) {
             // If the IMChat instance is not null, start typing
             [chat setLocalUserIsTyping:YES];
@@ -232,23 +256,43 @@ BlueBubblesHelper *plugin;
     return 0;
 }
 
-+(IMTextMessagePartChatItem *) getMessageItem:(IMChat *)chat :(NSString *)actionMessageGuid {
++(NSArray *) getMessageItem:(IMChat *)chat :(NSString *)actionMessageGuid {
     if(chat == nil) return nil;
     
     NSArray *items = [chat chatItems];
     
     for(id item in items) {
-        // If the type is Text (maybe can pass other types??)
-        if([NSStringFromClass([item class]) isEqualToString: @"IMTextMessagePartChatItem"]) {
-//            DLog(@"BLUEBUBBLESHELPER: %@", item);
-//            DLog(@"BLUEBUBBLESHELPER: %@", [[item message] guid]);
-
-            // If the guid matches, return the item
+        // If the class is an attachment
+        if([NSStringFromClass([item class]) isEqualToString: @"IMAttachmentMessagePartChatItem"]) {
             if([[[item message] guid] isEqualToString:(actionMessageGuid)]) {
                 
                 DLog(@"BLUEBUBBLESHELPER: %@", [[item message] guid]);
 
-                return item;
+                return @[item, @"3"];
+            }
+        // If the class is a text message
+        } else if([NSStringFromClass([item class]) isEqualToString: @"IMTextMessagePartChatItem"]) {
+            if([[[item message] guid] isEqualToString:(actionMessageGuid)]) {
+                
+                DLog(@"BLUEBUBBLESHELPER: %@", [[item message] guid]);
+
+                return @[item, @"1"];
+            }
+        // If the class is handwritten or link
+        } else if([NSStringFromClass([item class]) isEqualToString: @"IMTranscriptPluginChatItem"]) {
+            if([[[item message] guid] isEqualToString:(actionMessageGuid)]) {
+                
+                DLog(@"BLUEBUBBLESHELPER: %@", [[item message] guid]);
+
+                return @[item, @"3"];
+            }
+        // If its an audio message
+        } else if([NSStringFromClass([item class]) isEqualToString: @"IMAudioMessageChatItem"]) {
+            if([[[item message] guid] isEqualToString:(actionMessageGuid)]) {
+                
+                DLog(@"BLUEBUBBLESHELPER: %@", [[item message] guid]);
+
+                return @[item, @"2"];
             }
         }
     }
@@ -271,6 +315,12 @@ BlueBubblesHelper *plugin;
         [[NetworkController sharedInstance] sendMessage: @{@"event": @"stopped-typing", @"guid": guid}];
         DLog(@"BLUEBUBBLESHELPER: %@ stopped typing", guid);
     }
+}
+
++(void) updateMessage:(NSString *)chatGuid :(NSString *)tempGuid :(NSString *)newGuid {
+    [[NetworkController sharedInstance] sendMessage: @{@"event": @"message-match", @"chatGuid": chatGuid, @"tempGuid": tempGuid, @"newGuid": newGuid}];
+    
+    DLog(@"BLUEBUBBLESHELPER: %@ updated message guid", newGuid);
 }
 
 @end
@@ -375,9 +425,12 @@ ZKSwizzleInterface(BBH_IMMessageItem, IMMessageItem, NSObject)
 
 //ZKSwizzleInterface(WBWT_IMChat, IMChat, NSObject)
 //@implementation WBWT_IMChat
-//-(void)_setDisplayName:(id)arg1 {
-//    DLog(@"BLUEBUBBLESHELPER: %@", [arg1 className]);
+//- (void)sendMessageAcknowledgment:(long long)arg1 forChatItem:(id)arg2 withMessageSummaryInfo:(id)arg3 {
+//    DLog(@"BLUEBUBBLESHELPER:arg1 %llu", arg1);
+//    DLog(@"BLUEBUBBLESHELPER:arg2 %@", arg2);
+//    DLog(@"BLUEBUBBLESHELPER:arg3 %@", arg3);
 //}
+//
 //@end
 //
 //-(void)sendMessageAcknowledgment:(long long)arg1 forChatItem:(id)arg2 withAssociatedMessageInfo:(id)arg3 withGuid:(id)arg4 {
